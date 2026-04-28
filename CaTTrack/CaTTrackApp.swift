@@ -2,7 +2,11 @@
 //  CaTTrackApp.swift
 //  CaTTrack
 //
-//  Created by Kamilo Ramirez on 4/27/26.
+//  App entry. Owns the ModelContainer and the AuthService.
+//
+//  Single-container rule: AuthService and the .modelContainer
+//  modifier share one container so writes are visible across all
+//  views in the same session.
 //
 
 import SwiftUI
@@ -10,22 +14,39 @@ import SwiftData
 
 @main
 struct CaTTrackApp: App {
-    var sharedModelContainer: ModelContainer = {
+    
+    let sharedModelContainer: ModelContainer
+    
+    @StateObject private var auth: AuthService
+    
+    init() {
         let schema = Schema([
-            Item.self,
+            User.self,
+            Pet.self,
+            PetGoals.self,
+            LogEntry.self,
+            Item.self  // kept from the original scaffold
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+        let configuration = ModelConfiguration(schema: schema,
+                                               isStoredInMemoryOnly: false)
+        let container: ModelContainer
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            container = try ModelContainer(for: schema,
+                                           configurations: [configuration])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
-    }()
-
+        
+        self.sharedModelContainer = container
+        _auth = StateObject(
+            wrappedValue: AuthService(context: container.mainContext)
+        )
+    }
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(auth)
         }
         .modelContainer(sharedModelContainer)
     }
