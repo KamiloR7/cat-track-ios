@@ -2,9 +2,21 @@
 //  DashboardView.swift
 //  CaTTrack
 //
-//  Home tab. Shows the active cat profile and a minimizable
-//  Daily Goals & Stats panel. Quick Actions has been removed in
-//  favor of the bottom tab bar (see MainTabView).
+//  Home tab. Live data:
+//    - Cat profile pulls from the active Pet.
+//    - Daily Goals & Stats pulls from PetGoals (targets) and from
+//      today's LogEntry rows (current values).
+//    - Body Condition Score is computed from current weight + breed
+//      via BodyConditionEstimator. See that file's header for the
+//      science and source citations.
+//
+//  Math:
+//    - Calories consumed today = sum of LogEntry.caloriesConsumed
+//      across today's meal entries.
+//    - Water consumed today = sum of LogEntry.waterMl across today's
+//      water entries.
+//    - Restroom visits today = count of today's restroom entries
+//      (no cap — every logged visit increments the counter).
 //
 
 import SwiftUI
@@ -15,13 +27,63 @@ struct DashboardView: View {
     @EnvironmentObject private var auth: AuthService
     
     @State private var isGoalsExpanded: Bool = true
+    @State private var isShowingBCSDetail: Bool = false
     
-    /// First registered pet for the current user. The project doc
-    /// allows multiple pets in the future via a drop-down; for now
-    /// we display the first one.
+    @Query private var todaysEntries: [LogEntry]
+    
+    init() {
+        let cal = Calendar.current
+        let startOfToday = cal.startOfDay(for: Date())
+        let startOfTomorrow = cal.date(byAdding: .day, value: 1, to: startOfToday) ?? startOfToday
+        
+        _todaysEntries = Query(
+            filter: #Predicate<LogEntry> { entry in
+                entry.occurredAt >= startOfToday && entry.occurredAt < startOfTomorrow
+            },
+            sort: \LogEntry.occurredAt,
+            order: .forward
+        )
+    }
+    
     private var currentPet: Pet? {
         auth.currentUser?.pets.first
     }
+    
+    private var petEntriesToday: [LogEntry] {
+        guard let pet = currentPet else { return [] }
+        let petID = pet.persistentModelID
+        return todaysEntries.filter { $0.pet?.persistentModelID == petID }
+    }
+    
+    // MARK: - Aggregates
+    
+    private var caloriesToday: Int {
+        petEntriesToday
+            .filter { $0.type == .meal }
+            .reduce(0) { $0 + $1.caloriesConsumed }
+    }
+    
+    private var waterMlToday: Int {
+        petEntriesToday
+            .filter { $0.type == .water }
+            .reduce(0) { $0 + ($1.waterMl ?? 0) }
+    }
+    
+    private var restroomVisitsToday: Int {
+        petEntriesToday.filter { $0.type == .restroom }.count
+    }
+    
+    // MARK: - Body Condition
+    
+    private var bodyCondition: BodyCondition? {
+        guard let pet = currentPet else { return nil }
+        return BodyConditionEstimator.evaluate(
+            weightKg: pet.weightKg,
+            breed: pet.breedEnum
+        )
+    }
+    
+    // MARK: - View
     
     var body: some View {
         NavigationStack {
@@ -46,7 +108,7 @@ struct DashboardView: View {
                                     .bold()
                                 Text(petSubtitle)
                                     .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Color.secondary)
                             }
                             
                             Spacer()
@@ -57,10 +119,17 @@ struct DashboardView: View {
                         HStack(spacing: 24) {
                             statBadge(icon: "scalemass.fill",
                                       label: "Weight",
-                                      value: weightDisplay)
-                            statBadge(icon: "chart.bar.fill",
-                                      label: "BMI",
-                                      value: "--")
+                                      value: weightDisplay,
+                                      tint: .orange)
+                            
+                            // Body Condition Score badge — replaces the BMI placeholder.
+                            // Tappable for the breed-specific ideal range explanation.
+                            Button {
+                                isShowingBCSDetail = true
+                            } label: {
+                                bcsStatBadge
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding()
@@ -82,7 +151,7 @@ struct DashboardView: View {
                                     .font(.headline)
                                 Spacer()
                                 Image(systemName: isGoalsExpanded ? "chevron.up" : "chevron.down")
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(Color.secondary)
                             }
                             .padding()
                         }
@@ -90,21 +159,30 @@ struct DashboardView: View {
                         
                         if isGoalsExpanded {
                             VStack(spacing: 16) {
-                                goalCard(icon: "flame.fill",
-                                         title: "Calories",
-                                         current: "0",
-                                         goal: caloriesGoal,
-                                         color: .red)
-                                goalCard(icon: "drop.fill",
-                                         title: "Water",
-                                         current: "0",
-                                         goal: waterGoal,
-                                         color: .cyan)
-                                goalCard(icon: "toilet.fill",
-                                         title: "Restroom",
-                                         current: "0",
-                                         goal: "3 visits",
-                                         color: .green)
+                                ProgressGoalCard(
+                                    icon: "flame.fill",
+                                    title: "Calories",
+                                    currentText: "\(caloriesToday)",
+                                    goalText: caloriesGoalText,
+                                    progress: caloriesProgress,
+                                    color: .red
+                                )
+                                
+                                ProgressGoalCard(
+                                    icon: "drop.fill",
+                                    title: "Water",
+                                    currentText: "\(waterMlToday) ml",
+                                    goalText: waterGoalText,
+                                    progress: waterProgress,
+                                    color: .cyan
+                                )
+                                
+                                CountGoalCard(
+                                    icon: "toilet.fill",
+                                    title: "Restroom",
+                                    count: restroomVisitsToday,
+                                    color: .green
+                                )
                             }
                             .padding()
                             .transition(.move(edge: .top).combined(with: .opacity))
@@ -127,10 +205,87 @@ struct DashboardView: View {
                         .foregroundStyle(.red)
                 }
             }
+            .alert("Body Condition Score",
+                   isPresented: $isShowingBCSDetail,
+                   presenting: bodyCondition) { _ in
+                Button("OK", role: .cancel) { }
+            } message: { bc in
+                Text(bcsDetailMessage(for: bc))
+            }
         }
     }
     
-    // MARK: - Computed display strings
+    // MARK: - BCS Stat Badge
+    
+    private var bcsStatBadge: some View {
+        HStack(spacing: 8) {
+            // Colored circle with score number inside
+            ZStack {
+                Circle()
+                    .fill(bcsTintColor.opacity(0.18))
+                    .frame(width: 30, height: 30)
+                if let bc = bodyCondition {
+                    Text("\(bc.score)")
+                        .font(.subheadline)
+                        .fontWeight(.bold)
+                        .foregroundStyle(bcsTintColor)
+                } else {
+                    Text("--")
+                        .font(.subheadline)
+                        .fontWeight(.bold)
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+            
+            VStack(alignment: .leading, spacing: 2) {
+                Text("BCS (est.)")
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                Text(bcsCategoryText)
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    
+    private var bcsTintColor: Color {
+        guard let bc = bodyCondition else { return .gray }
+        switch bc.category {
+        case .severelyUnderweight, .obese:
+            return .red
+        case .underweight, .overweight:
+            return .orange
+        case .lean, .slightlyOverweight:
+            return .yellow
+        case .ideal:
+            return .green
+        }
+    }
+    
+    private var bcsCategoryText: String {
+        bodyCondition?.category.rawValue ?? "—"
+    }
+    
+    private func bcsDetailMessage(for bc: BodyCondition) -> String {
+        let lo = String(format: "%.1f", bc.idealRangeKg.lowerBound)
+        let hi = String(format: "%.1f", bc.idealRangeKg.upperBound)
+        let breedName = currentPet?.breedEnum.rawValue ?? "this breed"
+        return """
+        Score: \(bc.score)/9 — \(bc.category.rawValue)
+        
+        Ideal range for \(breedName): \(lo)–\(hi) kg.
+        
+        BCS is a 1–9 screening scale recommended by the AAFP. \
+        5 is the clinical ideal. This estimate uses your cat's weight \
+        relative to their breed's healthy range; consult a veterinarian \
+        for a definitive assessment.
+        """
+    }
+    
+    // MARK: - Display strings
     
     private var petSubtitle: String {
         guard let pet = currentPet else { return "" }
@@ -143,26 +298,36 @@ struct DashboardView: View {
         return String(format: "%.1f kg", pet.weightKg)
     }
     
-    private var caloriesGoal: String {
+    private var caloriesGoalText: String {
         guard let g = currentPet?.goals else { return "--" }
         return "\(g.targetCaloriesPerDay) kcal"
     }
     
-    private var waterGoal: String {
+    private var waterGoalText: String {
         guard let g = currentPet?.goals else { return "--" }
         return "\(g.targetWaterMlPerDay) ml"
     }
     
+    private var caloriesProgress: Double {
+        guard let goal = currentPet?.goals?.targetCaloriesPerDay, goal > 0 else { return 0 }
+        return min(1.0, Double(caloriesToday) / Double(goal))
+    }
+    
+    private var waterProgress: Double {
+        guard let goal = currentPet?.goals?.targetWaterMlPerDay, goal > 0 else { return 0 }
+        return min(1.0, Double(waterMlToday) / Double(goal))
+    }
+    
     // MARK: - Subviews
     
-    private func statBadge(icon: String, label: String, value: String) -> some View {
+    private func statBadge(icon: String, label: String, value: String, tint: Color) -> some View {
         HStack(spacing: 8) {
             Image(systemName: icon)
-                .foregroundStyle(.orange)
+                .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(label)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
                 Text(value)
                     .font(.subheadline)
                     .fontWeight(.semibold)
@@ -170,12 +335,19 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+}
+
+// MARK: - ProgressGoalCard (calories, water)
+
+private struct ProgressGoalCard: View {
+    let icon: String
+    let title: String
+    let currentText: String
+    let goalText: String
+    let progress: Double
+    let color: Color
     
-    private func goalCard(icon: String,
-                          title: String,
-                          current: String,
-                          goal: String,
-                          color: Color) -> some View {
+    var body: some View {
         HStack(spacing: 16) {
             Image(systemName: icon)
                 .resizable()
@@ -190,9 +362,9 @@ struct DashboardView: View {
                 Text(title)
                     .font(.subheadline)
                     .fontWeight(.semibold)
-                Text("\(current) / \(goal)")
+                Text("\(currentText) / \(goalText)")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.secondary)
             }
             
             Spacer()
@@ -200,14 +372,14 @@ struct DashboardView: View {
             ZStack {
                 Circle()
                     .stroke(color.opacity(0.2), lineWidth: 4)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
                 Circle()
-                    .trim(from: 0, to: 0.0)
+                    .trim(from: 0, to: progress)
                     .stroke(color,
                             style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .frame(width: 40, height: 40)
+                    .frame(width: 44, height: 44)
                     .rotationEffect(.degrees(-90))
-                Text("0%")
+                Text("\(Int((progress * 100).rounded()))%")
                     .font(.caption2)
                     .fontWeight(.bold)
             }
@@ -215,6 +387,54 @@ struct DashboardView: View {
         .padding()
         .background(Color(.systemGray6))
         .cornerRadius(16)
+    }
+}
+
+// MARK: - CountGoalCard (restroom)
+
+private struct CountGoalCard: View {
+    let icon: String
+    let title: String
+    let count: Int
+    let color: Color
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            Image(systemName: icon)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 28, height: 28)
+                .foregroundStyle(color)
+                .padding(10)
+                .background(color.opacity(0.15))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                Text(visitsLabel)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+            }
+            
+            Spacer()
+            
+            Text("\(count)")
+                .font(.title3)
+                .fontWeight(.bold)
+                .foregroundStyle(color)
+                .frame(width: 44, height: 44)
+                .background(color.opacity(0.15))
+                .clipShape(Circle())
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(16)
+    }
+    
+    private var visitsLabel: String {
+        count == 1 ? "1 visit" : "\(count) visits"
     }
 }
 

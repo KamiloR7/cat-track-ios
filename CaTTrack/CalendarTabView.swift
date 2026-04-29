@@ -341,12 +341,13 @@ private struct LogEntryDetailRow: View {
             
             switch entry.type {
             case .meal:
-                if let kcal = entry.kcal {
-                    Text("Calories: \(kcal) kcal")
+                Text("Calories: \(entry.caloriesConsumed) kcal")
                         .font(.subheadline)
-                }
-                if let oz = entry.ozServed {
-                    Text(String(format: "Served: %.1f oz", oz))
+                if let served = entry.ozServed, let serving = entry.servingSizeOz {
+                    Text(String(format: "Served: %.1f / %.1f oz", served, serving))
+                        .font(.subheadline)
+                } else if let served = entry.ozServed {
+                    Text(String(format: "Served: %.1f oz", served))
                         .font(.subheadline)
                 }
                 if let brand = entry.brand, !brand.isEmpty {

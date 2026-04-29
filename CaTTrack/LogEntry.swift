@@ -3,19 +3,25 @@
 //  CaTTrack
 //
 //  A single logged event for a Pet. Three flavors share one model:
-//    .meal      -> kcal, ozServed, brand, foodType   (note optional)
-//    .water     -> waterMl                           (note optional)
-//    .restroom  -> (no extra fields)                 (note optional)
+//    .meal      -> kcal, servingSizeOz, ozServed, brand, foodType   (note optional)
+//    .water     -> waterMl                                          (note optional)
+//    .restroom  -> (no extra fields)                                (note optional)
 //
-//  Storing all three flavors in one entity keeps the calendar query
-//  simple ("give me everything for this day") and sidesteps the need
-//  for three parallel tables. Type-specific fields are Optional so
-//  the schema accurately reflects "not applicable for this kind."
+//  Calorie math (meal logs):
+//
+//      caloriesConsumed = (ozServed / servingSizeOz) * kcal
+//
+//  Example: a 5oz can with 300 kcal total, cat ate 3oz of it →
+//      (3 / 5) * 300 = 180 kcal consumed
+//
+//  Storing the full-serving label values rather than pre-computed
+//  consumed calories keeps the data faithful to what the user sees
+//  on the food package and makes future reporting (e.g. "what brand
+//  has the highest kcal per oz") possible without re-deriving it.
 //
 //  Pattern reference:
-//   - 10 - Struct.swift            (struct vs class, value semantics — see LogType)
 //   - 11 - Enum.swift              (raw-value enum)
-//   - 6 - OOP Encapsulation.swift  (designated initializer)
+//   - 6 - OOP Encapsulation.swift  (designated init + computed property)
 //   - 10 Core Data.pdf             (entities + relationships, applied via SwiftData)
 //
 
@@ -41,9 +47,9 @@ enum LogType: String, CaseIterable, Identifiable, Codable {
     
     var tintHex: String {
         switch self {
-        case .meal:     return "FFA726"  // orange
-        case .water:    return "29B6F6"  // cyan
-        case .restroom: return "66BB6A"  // green
+        case .meal:     return "FFA726"
+        case .water:    return "29B6F6"
+        case .restroom: return "66BB6A"
         }
     }
 }
@@ -53,27 +59,23 @@ enum LogType: String, CaseIterable, Identifiable, Codable {
 @Model
 final class LogEntry {
     
-    // When the event happened (date + time, set by the user).
     var occurredAt: Date
-    
-    // When this row was written to the DB (audit trail).
     var loggedAt: Date
-    
-    // Stored as the enum's raw String so it survives schema migration.
     var typeRaw: String
     
-    // Type-specific fields (Optional — only one set populates per row).
-    var kcal: Int?
-    var ozServed: Double?
+    // Meal-specific fields
+    var kcal: Int?              // total kcal in the FULL serving (label value)
+    var servingSizeOz: Double?  // total oz in the FULL serving (label value)
+    var ozServed: Double?       // how much the cat actually ate
     var brand: String?
     var foodTypeRaw: String?
+    
+    // Water-specific
     var waterMl: Int?
     
-    // Free-text note (used most often for restroom anomalies, but allowed
-    // on any log type per spec).
+    // Always-available
     var note: String?
     
-    // Inverse of Pet.logEntries.
     var pet: Pet?
     
     // MARK: Computed accessors
@@ -87,10 +89,27 @@ final class LogEntry {
         return FoodType(rawValue: raw)
     }
     
+    /// Calories actually consumed for a meal entry. Uses the
+    /// (ozServed / servingSizeOz) ratio applied to the total kcal
+    /// of the full serving. Returns 0 for non-meal entries or for
+    /// any meal entry missing the data needed to compute the ratio.
+    var caloriesConsumed: Int {
+        guard type == .meal,
+              let kcal = kcal,
+              let serving = servingSizeOz, serving > 0,
+              let served = ozServed, served > 0
+        else {
+            return 0
+        }
+        let ratio = served / serving
+        return Int((Double(kcal) * ratio).rounded())
+    }
+    
     // MARK: Designated Initializer
     init(occurredAt: Date,
          type: LogType,
          kcal: Int? = nil,
+         servingSizeOz: Double? = nil,
          ozServed: Double? = nil,
          brand: String? = nil,
          foodType: FoodType? = nil,
@@ -101,6 +120,7 @@ final class LogEntry {
         self.loggedAt = Date()
         self.typeRaw = type.rawValue
         self.kcal = kcal
+        self.servingSizeOz = servingSizeOz
         self.ozServed = ozServed
         self.brand = brand
         self.foodTypeRaw = foodType?.rawValue

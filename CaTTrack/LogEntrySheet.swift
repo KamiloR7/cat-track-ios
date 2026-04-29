@@ -7,12 +7,12 @@
 //      Date  ->  Log Type  ->  Time  ->  conditional fields  ->  [Add]
 //
 //  Conditional fields by log type:
-//      .meal      -> kcal, oz served, brand, food type
+//      .meal      -> kcal (full serving), full serving oz,
+//                    oz served, brand, food type
 //      .water     -> ml
 //      .restroom  -> (none beyond the always-visible Note field)
 //
-//  Top-right red X dismisses; swipe-down also dismisses (default
-//  behavior for SwiftUI .sheet).
+//  Calorie math: kcal × (ozServed / servingSizeOz). See LogEntry.swift.
 //
 
 import SwiftUI
@@ -24,13 +24,14 @@ struct LogEntrySheet: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.dismiss) private var dismiss
     
-    // The three top-of-stack fields
+    // Top-of-stack
     @State private var selectedDate: Date = Date()
     @State private var selectedType: LogType = .meal
     @State private var selectedTime: Date = Date()
     
     // Meal-specific
     @State private var kcalText: String = ""
+    @State private var servingSizeOzText: String = ""
     @State private var ozServedText: String = ""
     @State private var brand: String = ""
     @State private var foodType: FoodType = .chicken
@@ -38,8 +39,7 @@ struct LogEntrySheet: View {
     // Water-specific
     @State private var waterMlText: String = ""
     
-    // Always-available note (per spec: restroom uses it most, but
-    // any log can carry one).
+    // Always-available
     @State private var note: String = ""
     
     @State private var errorMessage: String?
@@ -78,7 +78,6 @@ struct LogEntrySheet: View {
                     }
                     
                     // 4. Conditional fields driven by selectedType
-                    //    (switch over enum — 11 - Enum.swift)
                     Group {
                         switch selectedType {
                         case .meal:    mealFields
@@ -105,7 +104,7 @@ struct LogEntrySheet: View {
                             .padding(.horizontal, 4)
                     }
                     
-                    // 6. Add button (green, full width)
+                    // 6. Add button
                     Button(action: save) {
                         HStack {
                             Image(systemName: "plus.circle.fill")
@@ -128,7 +127,6 @@ struct LogEntrySheet: View {
             .navigationTitle("New Log")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // Red X — top-right dismiss button per spec.
                 ToolbarItem(placement: .topBarTrailing) {
                     Button {
                         dismiss()
@@ -146,20 +144,33 @@ struct LogEntrySheet: View {
     
     private var mealFields: some View {
         VStack(spacing: 16) {
-            sectionCard(title: "Calories (kcal, full serving)",
+            // 1) kcal in the full serving
+            sectionCard(title: "Calories — Full Serving (kcal)",
                         icon: "flame.fill",
                         tint: .red) {
-                TextField("e.g. 80", text: $kcalText)
+                TextField("e.g. 300 (kcal in the whole can)", text: $kcalText)
                     .keyboardType(.numberPad)
             }
             
-            sectionCard(title: "Oz Served",
-                        icon: "scalemass",
-                        tint: .orange) {
-                TextField("e.g. 3.0", text: $ozServedText)
+            // 2) Full serving size in oz
+            sectionCard(title: "Full Serving Size (oz)",
+                        icon: "shippingbox.fill",
+                        tint: .brown) {
+                TextField("e.g. 5.0 (oz in the whole can)",
+                          text: $servingSizeOzText)
                     .keyboardType(.decimalPad)
             }
             
+            // 3) Amount actually served
+            sectionCard(title: "Oz Served",
+                        icon: "scalemass",
+                        tint: .orange) {
+                TextField("e.g. 3.0 (oz cat actually ate)",
+                          text: $ozServedText)
+                    .keyboardType(.decimalPad)
+            }
+            
+            // 4) Brand
             sectionCard(title: "Brand",
                         icon: "tag.fill",
                         tint: .yellow) {
@@ -167,6 +178,7 @@ struct LogEntrySheet: View {
                     .textInputAutocapitalization(.words)
             }
             
+            // 5) Food Type
             sectionCard(title: "Food Type",
                         icon: "fork.knife",
                         tint: .orange) {
@@ -179,6 +191,20 @@ struct LogEntrySheet: View {
                 .tint(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            
+            // Live preview of the calorie math so the user can see
+            // what will actually land on the dashboard.
+            if let preview = caloriesPreview() {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(.blue)
+                    Text("Calories consumed: \(preview) kcal")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+            }
         }
     }
     
@@ -187,6 +213,19 @@ struct LogEntrySheet: View {
             TextField("e.g. 50", text: $waterMlText)
                 .keyboardType(.numberPad)
         }
+    }
+    
+    /// Returns the previewed kcal consumed if the user has entered
+    /// enough valid data. Used purely for the live preview hint.
+    private func caloriesPreview() -> Int? {
+        guard let total = Int(kcalText), total > 0,
+              let serving = Double(servingSizeOzText), serving > 0,
+              let served = Double(ozServedText), served > 0
+        else {
+            return nil
+        }
+        let ratio = min(served / serving, 1.0)
+        return Int((Double(total) * ratio).rounded())
     }
     
     // MARK: - Save
@@ -199,18 +238,27 @@ struct LogEntrySheet: View {
             return
         }
         
-        // Compose date + time into a single Date.
         let occurredAt = combine(date: selectedDate, time: selectedTime)
         
         let entry: LogEntry
         switch selectedType {
         case .meal:
-            guard let kcal = Int(kcalText), kcal >= 0 else {
-                errorMessage = "Please enter a valid kcal number."
+            // Full validation chain — guard / let pattern from
+            // 3 - ControlFlow.swift.
+            guard let kcal = Int(kcalText), kcal > 0 else {
+                errorMessage = "Please enter a valid kcal number for the full serving."
+                return
+            }
+            guard let serving = Double(servingSizeOzText), serving > 0 else {
+                errorMessage = "Please enter a valid full-serving size in oz."
                 return
             }
             guard let oz = Double(ozServedText), oz > 0 else {
-                errorMessage = "Please enter a valid oz amount."
+                errorMessage = "Please enter a valid oz amount served."
+                return
+            }
+            guard oz <= serving else {
+                errorMessage = "Oz served (\(oz)) cannot exceed the full serving size (\(serving))."
                 return
             }
             let trimmedBrand = brand.trimmingCharacters(in: .whitespaces)
@@ -221,6 +269,7 @@ struct LogEntrySheet: View {
             entry = LogEntry(occurredAt: occurredAt,
                              type: .meal,
                              kcal: kcal,
+                             servingSizeOz: serving,
                              ozServed: oz,
                              brand: trimmedBrand,
                              foodType: foodType,
@@ -263,7 +312,6 @@ struct LogEntrySheet: View {
         return t.isEmpty ? nil : t
     }
     
-    /// Combines the calendar day from `date` with the hour/minute from `time`.
     private func combine(date: Date, time: Date) -> Date {
         let cal = Calendar.current
         let dayParts = cal.dateComponents([.year, .month, .day], from: date)
@@ -276,12 +324,6 @@ struct LogEntrySheet: View {
         merged.minute = timeParts.minute
         return cal.date(from: merged) ?? Date()
     }
-    
-    // MARK: - Reusable section card
-    //
-    // Generic over the inner content (per generics conventions in
-    // Swift; not formally introduced in our slides but consistent
-    // with the helper-view pattern used elsewhere in the app).
     
     @ViewBuilder
     private func sectionCard<Content: View>(title: String,
