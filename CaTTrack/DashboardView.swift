@@ -7,16 +7,9 @@
 //    - Daily Goals & Stats pulls from PetGoals (targets) and from
 //      today's LogEntry rows (current values).
 //    - Body Condition Score is computed from current weight + breed
-//      via BodyConditionEstimator. See that file's header for the
-//      science and source citations.
-//
-//  Math:
-//    - Calories consumed today = sum of LogEntry.caloriesConsumed
-//      across today's meal entries.
-//    - Water consumed today = sum of LogEntry.waterMl across today's
-//      water entries.
-//    - Restroom visits today = count of today's restroom entries
-//      (no cap — every logged visit increments the counter).
+//      via BodyConditionEstimator.
+//    - DailyTrendChart visualizes calories / water / restroom over
+//      the last 7, 14, or 30 days.
 //
 
 import SwiftUI
@@ -122,8 +115,6 @@ struct DashboardView: View {
                                       value: weightDisplay,
                                       tint: .orange)
                             
-                            // Body Condition Score badge — replaces the BMI placeholder.
-                            // Tappable for the breed-specific ideal range explanation.
                             Button {
                                 isShowingBCSDetail = true
                             } label: {
@@ -192,6 +183,9 @@ struct DashboardView: View {
                     .cornerRadius(20)
                     .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
                     
+                    // Daily trend chart
+                    DailyTrendChart()
+                    
                     Spacer(minLength: 40)
                 }
                 .padding()
@@ -205,12 +199,16 @@ struct DashboardView: View {
                         .foregroundStyle(.red)
                 }
             }
-            .alert("Body Condition Score",
-                   isPresented: $isShowingBCSDetail,
-                   presenting: bodyCondition) { _ in
-                Button("OK", role: .cancel) { }
-            } message: { bc in
-                Text(bcsDetailMessage(for: bc))
+            .sheet(isPresented: $isShowingBCSDetail) {
+                if let bc = bodyCondition, let pet = currentPet {
+                    BCSDetailSheet(
+                        bodyCondition: bc,
+                        petName: pet.name,
+                        breedName: pet.breedEnum.rawValue
+                    )
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+                }
             }
         }
     }
@@ -219,7 +217,6 @@ struct DashboardView: View {
     
     private var bcsStatBadge: some View {
         HStack(spacing: 8) {
-            // Colored circle with score number inside
             ZStack {
                 Circle()
                     .fill(bcsTintColor.opacity(0.18))
@@ -267,22 +264,6 @@ struct DashboardView: View {
     
     private var bcsCategoryText: String {
         bodyCondition?.category.rawValue ?? "—"
-    }
-    
-    private func bcsDetailMessage(for bc: BodyCondition) -> String {
-        let lo = String(format: "%.1f", bc.idealRangeKg.lowerBound)
-        let hi = String(format: "%.1f", bc.idealRangeKg.upperBound)
-        let breedName = currentPet?.breedEnum.rawValue ?? "this breed"
-        return """
-        Score: \(bc.score)/9 — \(bc.category.rawValue)
-        
-        Ideal range for \(breedName): \(lo)–\(hi) kg.
-        
-        BCS is a 1–9 screening scale recommended by the AAFP. \
-        5 is the clinical ideal. This estimate uses your cat's weight \
-        relative to their breed's healthy range; consult a veterinarian \
-        for a definitive assessment.
-        """
     }
     
     // MARK: - Display strings
@@ -334,6 +315,145 @@ struct DashboardView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+// MARK: - BCS Detail Sheet
+
+private struct BCSDetailSheet: View {
+    
+    @Environment(\.dismiss) private var dismiss
+    
+    let bodyCondition: BodyCondition
+    let petName: String
+    let breedName: String
+    
+    @State private var isDisclaimerExpanded: Bool = false
+    
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    
+                    HStack(spacing: 16) {
+                        ZStack {
+                            Circle()
+                                .fill(scoreTint.opacity(0.18))
+                                .frame(width: 64, height: 64)
+                            Text("\(bodyCondition.score)")
+                                .font(.system(size: 28, weight: .bold))
+                                .foregroundStyle(scoreTint)
+                        }
+                        
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Score: \(bodyCondition.score)/9")
+                                .font(.headline)
+                            Text(bodyCondition.category.rawValue)
+                                .font(.subheadline)
+                                .foregroundStyle(scoreTint)
+                                .fontWeight(.semibold)
+                        }
+                        
+                        Spacer()
+                    }
+                    
+                    Divider()
+                    
+                    detailRow(
+                        icon: "arrow.left.and.right.circle.fill",
+                        tint: .blue,
+                        label: "Ideal range for \(breedName)",
+                        value: rangeText
+                    )
+                    
+                    detailRow(
+                        icon: "target",
+                        tint: .green,
+                        label: "Target weight for BCS 5",
+                        value: "\(petName) would need to be around \(formattedTarget) kg"
+                    )
+                    
+                    DisclosureGroup(isExpanded: $isDisclaimerExpanded) {
+                        Text(disclaimerText)
+                            .font(.footnote)
+                            .foregroundStyle(Color.secondary)
+                            .padding(.top, 8)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.gray)
+                            Text("About this score")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                        }
+                    }
+                    .padding(.top, 4)
+                    
+                    Spacer(minLength: 16)
+                }
+                .padding()
+            }
+            .navigationTitle("Body Condition Score")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+    
+    private var scoreTint: Color {
+        switch bodyCondition.category {
+        case .severelyUnderweight, .obese:
+            return .red
+        case .underweight, .overweight:
+            return .orange
+        case .lean, .slightlyOverweight:
+            return .yellow
+        case .ideal:
+            return .green
+        }
+    }
+    
+    private var rangeText: String {
+        let lo = String(format: "%.1f", bodyCondition.idealRangeKg.lowerBound)
+        let hi = String(format: "%.1f", bodyCondition.idealRangeKg.upperBound)
+        return "\(lo) – \(hi) kg"
+    }
+    
+    private var formattedTarget: String {
+        String(format: "%.1f", bodyCondition.targetWeightKg)
+    }
+    
+    private var disclaimerText: String {
+        """
+        BCS is a 1–9 screening scale recommended by the AAFP. \
+        5 out of 9 is recommended as the clinical ideal. This estimate \
+        uses your cat's weight relative to their breed's healthy range; \
+        consult a veterinarian for a definitive assessment.
+        """
+    }
+    
+    private func detailRow(icon: String,
+                           tint: Color,
+                           label: String,
+                           value: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .foregroundStyle(tint)
+                .frame(width: 24)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                Text(value)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+            }
+            Spacer()
+        }
     }
 }
 

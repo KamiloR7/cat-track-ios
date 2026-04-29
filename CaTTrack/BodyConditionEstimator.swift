@@ -15,13 +15,9 @@
 //  British Journal of Nutrition 2011) which grouped pure-bred
 //  cats into five weight classes from "very light" through
 //  "giant", and supplemented with breed-standard references
-//  (TICA / breed-club guidelines). Ranges represent unisex adult
-//  cats at ideal body condition; in real clinical practice, sex
-//  and life stage would further refine these numbers.
+//  (TICA / breed-club guidelines).
 //
-//  This is a screening tool, not a diagnosis. The output is
-//  intentionally labeled "BCS (est.)" in the UI so we are not
-//  overclaiming clinical accuracy.
+//  This is a screening tool, not a diagnosis.
 //
 //  Pattern reference:
 //   - 11 - Enum.swift              (raw-value enums + computed properties)
@@ -40,20 +36,6 @@ enum BodyConditionCategory: String {
     case slightlyOverweight  = "Slightly Overweight"
     case overweight          = "Overweight"
     case obese               = "Obese"
-    
-    /// SF Symbol color cue.
-    var color: String {
-        switch self {
-        case .severelyUnderweight, .obese:
-            return "red"
-        case .underweight, .overweight:
-            return "orange"
-        case .lean, .slightlyOverweight:
-            return "yellow"
-        case .ideal:
-            return "green"
-        }
-    }
 }
 
 struct BodyCondition {
@@ -62,6 +44,11 @@ struct BodyCondition {
     let category: BodyConditionCategory
     /// The breed's ideal weight range in kilograms (for UI context).
     let idealRangeKg: ClosedRange<Double>
+    /// The midpoint of the breed's ideal range — i.e. the weight
+    /// that would put the cat at BCS 5. Surfaced here so any view
+    /// (dashboard popup, future trend graph, etc.) reads the same
+    /// number rather than recomputing the midpoint independently.
+    let targetWeightKg: Double
     /// Cat's weight relative to ideal midpoint. 1.0 means perfectly on midpoint.
     let ratio: Double
 }
@@ -71,8 +58,6 @@ struct BodyCondition {
 enum BodyConditionEstimator {
     
     /// Looks up the unisex ideal weight range (kg) for a breed.
-    /// Sources: Munich 2011 pilot study + TICA breed standards;
-    /// see file header for full citation.
     static func idealRangeKg(for breed: CatBreed) -> ClosedRange<Double> {
         switch breed {
         case .domesticShorthair,
@@ -107,26 +92,20 @@ enum BodyConditionEstimator {
     }
     
     /// Compute body condition for a pet's current weight.
-    /// Returns BCS 1–9, a category label, and the breed's ideal range.
     static func evaluate(weightKg: Double, breed: CatBreed) -> BodyCondition {
         let range = idealRangeKg(for: breed)
         let midpoint = (range.lowerBound + range.upperBound) / 2.0
         
-        // Guard against degenerate input — designated init for Pet
-        // already prevents zero/negative weights, but we belt-and-
-        // suspenders here so a corrupt store can't crash the UI.
         guard midpoint > 0, weightKg > 0 else {
             return BodyCondition(score: 5,
                                  category: .ideal,
                                  idealRangeKg: range,
+                                 targetWeightKg: midpoint,
                                  ratio: 1.0)
         }
         
         let ratio = weightKg / midpoint
         
-        // Map ratio onto BCS 1–9. Cutoffs derived from the relationship
-        // between BCS levels and percentage-over-ideal documented in
-        // veterinary practice (Laflamme 1997, WSAVA guidelines).
         let score: Int
         let category: BodyConditionCategory
         
@@ -163,6 +142,7 @@ enum BodyConditionEstimator {
         return BodyCondition(score: score,
                              category: category,
                              idealRangeKg: range,
+                             targetWeightKg: midpoint,
                              ratio: ratio)
     }
 }
