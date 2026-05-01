@@ -86,14 +86,7 @@ struct DashboardView: View {
                     // Cat Profile Card
                     VStack(spacing: 12) {
                         HStack(spacing: 16) {
-                            Image(systemName: "cat.fill")
-                                .resizable()
-                                .scaledToFit()
-                                .frame(width: 60, height: 60)
-                                .foregroundStyle(.orange)
-                                .padding(12)
-                                .background(Color.orange.opacity(0.15))
-                                .clipShape(Circle())
+                            PetAvatarView(breed: currentPet?.breedEnum, size: 84)
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(currentPet?.name ?? "—")

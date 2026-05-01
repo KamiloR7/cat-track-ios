@@ -42,7 +42,7 @@ struct RegisterView: View {
                         .font(.title2)
                         .bold()
                     
-                    Text("All data is stored locally on this device.")
+                    Text("All data is stored locally.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -62,7 +62,7 @@ struct RegisterView: View {
                             Image(systemName: "person.fill")
                                 .foregroundStyle(.blue)
                                 .frame(width: 24)
-                            TextField("e.g. Jacob", text: $name)
+                            TextField("e.g. John Doe", text: $name)
                                 .textInputAutocapitalization(.words)
                                 .autocorrectionDisabled()
                         }
